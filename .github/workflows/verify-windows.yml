@@ -1,0 +1,30 @@
+name: 手动验收 Windows 安装与升级
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 与站点部署串行，避免 latest.json 在验收期间切换；不取消正在执行的工作。
+concurrency:
+  group: nexus-release-pages
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    if: github.repository == 'yccwh2008/nexus-releases' && github.event.repository.private == false && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: windows-2022
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          fetch-depth: 1
+          sparse-checkout: scripts/verify_windows_release.ps1
+          sparse-checkout-cone-mode: false
+          lfs: false
+          submodules: false
+      - name: 验证正式安装器、启动器及升级链路
+        shell: pwsh
+        run: ./scripts/verify_windows_release.ps1
