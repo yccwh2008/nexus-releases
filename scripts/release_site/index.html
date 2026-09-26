@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
+  <title>江枢 · Nexus 客户端下载</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <main>
+    <header><p class="eyebrow">江枢 · Nexus</p><h1>在自己的电脑上，完成日常办公。</h1>
+      <p>Windows 本机安装、本机运行。本站只分发客户端安装包与版本清单，不接收员工数据、账号凭据、任务记录或业务产物。</p></header>
+    <section aria-labelledby="download-title">
+      <h2 id="download-title">客户端版本</h2>
+      <p id="status" role="status">正在读取本站版本清单，尚未确认可用版本。</p>
+      <noscript><p>请启用 JavaScript 读取真实版本信息；本站未在页面中预填版本或上线状态。</p></noscript>
+      <div id="release" hidden>
+        <dl><dt>版本</dt><dd id="version"></dd><dt>大小</dt><dd id="size"></dd><dt>SHA-256</dt><dd><code id="sha256"></code></dd></dl>
+        <nav aria-label="下载文件"><a id="archive" download>下载 ZIP</a><a id="manifest" download>下载 manifest</a><a id="installer" download>下载安装脚本</a></nav>
+      </div>
+    </section>
+    <section aria-labelledby="install-title"><h2 id="install-title">在 Windows 上安装</h2>
+      <ol><li>将 ZIP、manifest 和 <code>install.ps1</code> 下载到同一个文件夹。</li>
+        <li>在该文件夹打开 PowerShell，核对 ZIP 的 SHA-256 与上方清单一致，再执行下方安装命令。</li>
+        <li>通过本机桌面入口启动。业务界面仅在本机 <code>127.0.0.1:8760</code> 运行，不将本机业务端口公开。</li></ol>
+      <pre><code id="install-command">版本清单读取成功后显示安装命令。</code></pre>
+      <p>安装脚本会创建桌面与登录启动入口；登录启动不主动打开浏览器。云之家相关功能另需从公司指定渠道安装并登录云之家。</p>
+    </section>
+    <section aria-labelledby="history-title"><h2 id="history-title">保留版本</h2><p>旧版本用于测试和回滚；常规安装以当前版本清单为准。</p><ul id="history"></ul></section>
+    <footer>数据留在各自电脑的数据目录或配置的业务目录。发布页不代表真实业务验收已完成。</footer>
+  </main>
+</body>
+</html>
