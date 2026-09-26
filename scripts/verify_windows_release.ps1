@@ -5,15 +5,184 @@ $ErrorActionPreference = 'Stop'
 $site = 'https://yccwh2008.github.io/nexus-releases/'
 $clock = [Diagnostics.Stopwatch]::StartNew()
 $launches = [Collections.Generic.List[object]]::new()
+$managedChildren = [Collections.Generic.List[object]]::new()
+$cleanupFailed = $false
 $report = [ordered]@{ schema = 1; result = 'failed'; phase = 'guard'; checks = @() }
 $summaryAllowed = $false
 $environmentSet = $false
 $client = $null
+$phaseStartedMs = -1
 
 function Require([bool]$Condition, [string]$Code) {
     if (-not $Condition) { throw $Code }
 }
 
+function Initialize-ManagedChild {
+    if ('NexusAcceptanceChild' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Win32.SafeHandles;
+
+// 仅移植 accept_job_restart.py 的挂起创建、先归属后恢复和专用 Job 收口。
+public sealed class NexusAcceptanceChild : IDisposable {
+    [StructLayout(LayoutKind.Sequential)] public struct Security { public int Size; public IntPtr Descriptor; [MarshalAs(UnmanagedType.Bool)] public bool Inherit; }
+    [StructLayout(LayoutKind.Sequential)] public struct Startup {
+        public int Size; public IntPtr Reserved, Desktop, Title;
+        public uint X, Y, XSize, YSize, XChars, YChars, Fill, Flags;
+        public ushort Show, ReservedSize; public IntPtr ReservedBytes, Input, Output, Error;
+    }
+    [StructLayout(LayoutKind.Sequential)] public struct ProcessInfo { public IntPtr Process, Thread; public uint Id, ThreadId; }
+    [StructLayout(LayoutKind.Sequential)] public struct BasicLimits {
+        public long ProcessTime, JobTime; public uint Flags; public UIntPtr MinWorkingSet, MaxWorkingSet;
+        public uint ActiveLimit; public UIntPtr Affinity; public uint Priority, Scheduling;
+    }
+    [StructLayout(LayoutKind.Sequential)] public struct IoCounters { public ulong ReadOps, WriteOps, OtherOps, ReadBytes, WriteBytes, OtherBytes; }
+    [StructLayout(LayoutKind.Sequential)] public struct ExtendedLimits {
+        public BasicLimits Basic; public IoCounters Io; public UIntPtr ProcessMemory, JobMemory, PeakProcessMemory, PeakJobMemory;
+    }
+    [StructLayout(LayoutKind.Sequential)] public struct Accounting {
+        public long UserTime, KernelTime, PeriodUser, PeriodKernel;
+        public uint Faults, Total, Active, Terminated;
+    }
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateJobObjectW(IntPtr security, string name);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetInformationJobObject(IntPtr job, int type, ref ExtendedLimits limits, uint size);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool QueryInformationJobObject(IntPtr job, int type, out Accounting info, uint size, IntPtr returned);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool AssignProcessToJobObject(IntPtr job, IntPtr process);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool IsProcessInJob(IntPtr process, IntPtr job, out bool result);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateJobObject(IntPtr job, uint code);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool CreatePipe(out IntPtr read, out IntPtr write, ref Security security, uint size);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetHandleInformation(IntPtr handle, uint mask, uint flags);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern IntPtr CreateFileW(string name, uint access, uint share, ref Security security, uint creation, uint flags, IntPtr template);
+    [DllImport("kernel32.dll", CharSet=CharSet.Unicode, SetLastError=true)] static extern bool CreateProcessW(string app, StringBuilder command, IntPtr ps, IntPtr ts, bool inherit, uint flags, IntPtr env, string cwd, ref Startup startup, out ProcessInfo info);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern uint ResumeThread(IntPtr thread);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern uint WaitForSingleObject(IntPtr handle, uint milliseconds);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool TerminateProcess(IntPtr process, uint code);
+    [DllImport("kernel32.dll", SetLastError=true)] static extern bool CloseHandle(IntPtr handle);
+    IntPtr job, process, thread;
+    bool assigned, verifiedEmpty;
+    public int Id { get; private set; }
+    public bool IsClosed { get; private set; }
+    public StreamReader StandardOutput { get; private set; }
+    public StreamReader StandardError { get; private set; }
+    public Task OutputCompletion { get; set; }
+    static void Check(bool ok, string code) {
+        if (!ok) throw new InvalidOperationException(code + "_" + Marshal.GetLastWin32Error());
+    }
+    static void Close(ref IntPtr handle) {
+        if (handle == IntPtr.Zero || handle == new IntPtr(-1)) return;
+        Check(CloseHandle(handle), "owned_handle_close_failed"); handle = IntPtr.Zero;
+    }
+    static string Quote(string value) {
+        var text = new StringBuilder("\""); int slashes = 0;
+        foreach (char c in value) {
+            if (c == '\\') { slashes++; continue; }
+            text.Append('\\', c == '"' ? slashes * 2 + 1 : slashes).Append(c); slashes = 0;
+        }
+        return text.Append('\\', slashes * 2).Append('"').ToString();
+    }
+    public NexusAcceptanceChild() {
+        job = CreateJobObjectW(IntPtr.Zero, null);
+        Check(job != IntPtr.Zero, "owned_job_create_failed");
+        var limits = new ExtendedLimits(); limits.Basic.Flags = 0x2000; // KILL_ON_JOB_CLOSE；不允许 breakaway。
+        try { Check(SetInformationJobObject(job, 9, ref limits, (uint)Marshal.SizeOf<ExtendedLimits>()), "owned_job_limits_failed"); }
+        catch { Close(ref job); throw; }
+    }
+    public void Start(string file, string[] args) {
+        if (Id != 0 || IsClosed) throw new InvalidOperationException("owned_process_already_started");
+        IntPtr outputRead=IntPtr.Zero, outputWrite=IntPtr.Zero, errorRead=IntPtr.Zero, errorWrite=IntPtr.Zero, input=IntPtr.Zero;
+        var security = new Security { Size=Marshal.SizeOf<Security>(), Inherit=true };
+        try {
+            Check(CreatePipe(out outputRead, out outputWrite, ref security, 0), "stdout_pipe_failed");
+            Check(CreatePipe(out errorRead, out errorWrite, ref security, 0), "stderr_pipe_failed");
+            Check(SetHandleInformation(outputRead, 1, 0), "stdout_inheritance_failed");
+            Check(SetHandleInformation(errorRead, 1, 0), "stderr_inheritance_failed");
+            input = CreateFileW("NUL", 0x80000000, 3, ref security, 3, 0, IntPtr.Zero);
+            Check(input != new IntPtr(-1), "null_input_failed");
+            var startup = new Startup { Size=Marshal.SizeOf<Startup>(), Flags=0x100, Input=input, Output=outputWrite, Error=errorWrite };
+            var command = new StringBuilder(Quote(file));
+            foreach (string arg in args) command.Append(' ').Append(Quote(arg));
+            ProcessInfo created;
+            Check(CreateProcessW(file, command, IntPtr.Zero, IntPtr.Zero, true, 0x08000004, IntPtr.Zero, null, ref startup, out created), "child_create_failed");
+            process=created.Process; thread=created.Thread; Id=(int)created.Id;
+            Check(AssignProcessToJobObject(job, process), "owned_job_assign_failed"); assigned=true;
+            StandardOutput = new StreamReader(new FileStream(new SafeFileHandle(outputRead, true), FileAccess.Read, 4096, false), Encoding.UTF8);
+            outputRead=IntPtr.Zero;
+            StandardError = new StreamReader(new FileStream(new SafeFileHandle(errorRead, true), FileAccess.Read, 4096, false), Encoding.UTF8);
+            errorRead=IntPtr.Zero;
+            Check(ResumeThread(thread) != uint.MaxValue, "child_resume_failed");
+            Close(ref thread);
+        } finally {
+            Close(ref outputRead); Close(ref outputWrite); Close(ref errorRead); Close(ref errorWrite); Close(ref input);
+        }
+    }
+    public bool WaitForExit(int milliseconds) {
+        uint result=WaitForSingleObject(process, (uint)Math.Max(0, milliseconds));
+        Check(result == 0 || result == 258, "child_wait_failed"); return result == 0;
+    }
+    public int ExitCode { get { uint code; Check(GetExitCodeProcess(process, out code), "child_exit_code_failed"); return unchecked((int)code); } }
+    public uint ActiveProcesses {
+        get {
+            if (IsClosed) return 0;
+            Accounting info; Check(QueryInformationJobObject(job, 1, out info, (uint)Marshal.SizeOf<Accounting>(), IntPtr.Zero), "owned_job_query_failed");
+            return info.Active;
+        }
+    }
+    public bool ContainsPid(int pid) {
+        if (IsClosed) return false;
+        IntPtr handle=OpenProcess(0x1000, false, (uint)pid);
+        Check(handle != IntPtr.Zero, "owned_member_open_failed");
+        try { bool member; Check(IsProcessInJob(handle, job, out member), "owned_member_query_failed"); return member; }
+        finally { Close(ref handle); }
+    }
+    public void Stop(int milliseconds) {
+        if (IsClosed) return;
+        var timer=Stopwatch.StartNew();
+        // 挂入 Job 失败的进程仍是本对象持有的挂起进程，尚不可能创建后代。
+        if (process != IntPtr.Zero && !assigned && !WaitForExit(0)) {
+            Check(TerminateProcess(process, 1), "suspended_child_stop_failed");
+            if (!WaitForExit(milliseconds)) throw new InvalidOperationException("suspended_child_stop_timeout");
+        }
+        if (ActiveProcesses != 0) Check(TerminateJobObject(job, 1), "owned_job_stop_failed");
+        while (ActiveProcesses != 0) {
+            if (timer.ElapsedMilliseconds >= milliseconds) throw new InvalidOperationException("owned_descendants_stop_timeout");
+            Thread.Sleep(20);
+        }
+        if (process != IntPtr.Zero && !WaitForExit(Math.Max(0, milliseconds-(int)timer.ElapsedMilliseconds)))
+            throw new InvalidOperationException("owned_parent_stop_timeout");
+        if (OutputCompletion != null) {
+            int left=Math.Max(0, milliseconds-(int)timer.ElapsedMilliseconds);
+            if (!OutputCompletion.Wait(left)) throw new InvalidOperationException("owned_output_close_timeout");
+        }
+        verifiedEmpty=true;
+    }
+    public void Dispose() {
+        if (IsClosed) return;
+        if (!verifiedEmpty) throw new InvalidOperationException("owned_cleanup_unverified");
+        StandardOutput?.Dispose(); StandardError?.Dispose();
+        Close(ref thread); Close(ref process); Close(ref job); IsClosed=true;
+    }
+}
+'@
+}
+function Set-Phase([string]$Name, [string]$PreviousResult = 'passed') {
+    $now = $clock.ElapsedMilliseconds
+    if ($script:phaseStartedMs -ge 0) {
+        Write-Host ([ordered]@{ event = 'phase_end'; phase = $report.phase; result = $PreviousResult; elapsed_ms = ($now - $script:phaseStartedMs) } | ConvertTo-Json -Compress)
+    }
+    $script:phaseStartedMs = $now
+    if ($Name) {
+        $report.phase = $Name
+        Write-Host ([ordered]@{ event = 'phase_start'; phase = $Name; elapsed_ms = $now } | ConvertTo-Json -Compress)
+    }
+}
 function Assert-ActionsRunner {
     Require ($PSVersionTable.PSVersion.Major -ge 7 -and [Environment]::OSVersion.Platform -eq 'Win32NT') 'windows_pwsh_required'
     Require ($env:GITHUB_ACTIONS -ceq 'true' -and $env:RUNNER_ENVIRONMENT -ceq 'github-hosted') 'hosted_actions_required'
@@ -49,46 +218,52 @@ function Assert-FileHash([string]$Path, [string]$Hash, [long]$Size = 0) {
 
 # 保留自身创建的进程句柄；不按名称或端口批量终止进程。
 function Invoke-Child([string]$File, [string[]]$Arguments, [int]$Seconds = 120, [string]$ServiceVersion = '') {
-    $info = [Diagnostics.ProcessStartInfo]::new($File)
-    $info.UseShellExecute = $false
-    $info.CreateNoWindow = $true
-    $info.RedirectStandardOutput = $true
-    $info.RedirectStandardError = $true
-    foreach ($argument in $Arguments) { $info.ArgumentList.Add($argument) }
-    $process = [Diagnostics.Process]::new()
-    $process.StartInfo = $info
+    Initialize-ManagedChild
+    $deadlineMs = $clock.Elapsed.TotalMilliseconds + (Budget $Seconds) * 1000
+    $process = [NexusAcceptanceChild]::new()
+    $managedChildren.Add($process) # 先登记，再创建任何进程；覆盖安装器、检查器和 launcher。
     $record = $null
-    $processStarted = $false
-    $timeoutMs = (Budget $Seconds) * 1000
+    $retain = $false
     try {
         $started = [DateTime]::UtcNow
-        $processStarted = $process.Start()
-        Require $processStarted 'child_start_failed'
+        $process.Start($File, $Arguments)
         if ($ServiceVersion) {
             $versionRoot = Join-Path $install "versions/$ServiceVersion"
-            $record = [pscustomobject]@{ Parent = $process.Id; Started = $started; Ended = [DateTime]::MaxValue; Version = $ServiceVersion; Python = (Join-Path $versionRoot 'runtime/python.exe'); Entry = (Join-Path $versionRoot 'start.py') }
+            $record = [pscustomobject]@{ Parent = $process.Id; Started = $started; Ended = [DateTime]::MaxValue; Version = $ServiceVersion; Python = (Join-Path $versionRoot 'runtime/python.exe'); Entry = (Join-Path $versionRoot 'start.py'); Owner = $process }
             $launches.Add($record)
         }
-        $stdout = $process.StandardOutput.ReadToEndAsync()
-        $stderr = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit($timeoutMs)) { throw 'child_timeout' }
+        $stdout = if ($ServiceVersion) {
+            $process.StandardOutput.BaseStream.CopyToAsync([IO.Stream]::Null)
+        } else {
+            $process.StandardOutput.ReadToEndAsync()
+        }
+        $stderr = $process.StandardError.BaseStream.CopyToAsync([IO.Stream]::Null)
+        $process.OutputCompletion = [Threading.Tasks.Task]::WhenAll([Threading.Tasks.Task[]]@($stdout, $stderr))
+        $remainingMs = [int][Math]::Floor([Math]::Min($deadlineMs, 1020000) - $clock.Elapsed.TotalMilliseconds)
+        if ($remainingMs -le 0 -or -not $process.WaitForExit($remainingMs)) { throw 'child_timeout' }
         Require ($process.ExitCode -eq 0) 'child_failed'
-        return $stdout.GetAwaiter().GetResult()
+        if ($ServiceVersion) { $retain = $true; return '' } # 保留 Job 和读端至对应停止阶段。
+        $remainingMs = [int][Math]::Floor([Math]::Min($deadlineMs, 1020000) - $clock.Elapsed.TotalMilliseconds)
+        if ($remainingMs -le 0 -or -not $process.OutputCompletion.Wait($remainingMs)) { throw 'child_output_timeout' }
+        return $stdout.GetAwaiter().GetResult() # 两个输出任务均已在剩余预算内完成。
     }
     finally {
-        if ($processStarted -and -not $process.HasExited) { $process.Kill(); $null = $process.WaitForExit(5000) }
         if ($record) { $record.Ended = [DateTime]::UtcNow }
-        $process.Dispose()
+        if (-not $retain) {
+            try { $process.Stop(5000); $process.Dispose(); $null = $managedChildren.Remove($process) }
+            catch { $script:cleanupFailed = $true; throw } # 保留失败对象，最终收口仍会重试，不能误报 true。
+        }
     }
 }
 
 function Get-OwnedServices {
     foreach ($launch in $launches) {
+        if ($launch.Owner.IsClosed) { continue }
         $children = @(Get-CimInstance Win32_Process -Filter "ParentProcessId = $($launch.Parent)" -ErrorAction Stop)
         foreach ($child in $children) {
             $created = $child.CreationDate.ToUniversalTime()
             $command = '^"?' + [regex]::Escape($launch.Python) + '"?\s+"?' + [regex]::Escape($launch.Entry) + '"?\s*$'
-            if ($created -ge $launch.Started -and $created -le $launch.Ended -and $child.ExecutablePath -ieq $launch.Python -and $child.CommandLine -imatch $command) {
+            if ($created -ge $launch.Started -and $created -le $launch.Ended -and $child.ExecutablePath -ieq $launch.Python -and $child.CommandLine -imatch $command -and $launch.Owner.ContainsPid([int]$child.ProcessId)) {
                 [pscustomobject]@{ Id = [int]$child.ProcessId; Created = $created; Version = $launch.Version }
             }
         }
@@ -104,18 +279,12 @@ function Assert-ServiceOwner {
 }
 
 function Stop-OwnedServices {
-    foreach ($owned in @(Get-OwnedServices)) {
-        $process = $null
-        try {
-            $process = [Diagnostics.Process]::GetProcessById($owned.Id)
-            $null = $process.Handle
-            Require ([Math]::Abs(($process.StartTime.ToUniversalTime() - $owned.Created).TotalMilliseconds) -lt 1) 'process_identity_changed'
-            if (-not $process.HasExited) { $process.Kill(); Require ($process.WaitForExit(10000)) 'owned_process_stop_timeout' }
-        }
-        catch [ArgumentException] { } # 已退出；不以复用的 PID 继续查杀。
-        finally { if ($process) { $process.Dispose() } }
+    # Job 句柄是归属依据；父进程先退出、后代换父或尚未进入 ServiceVersion 也不会漏收。
+    foreach ($process in @($managedChildren.ToArray())) {
+        try { $process.Stop(10000); $process.Dispose(); $null = $managedChildren.Remove($process) }
+        catch { $script:cleanupFailed = $true } # 单个失败不阻止回收其他本任务 Job。
     }
-    Require (@(Get-OwnedServices).Count -eq 0) 'owned_process_remaining'
+    Require (-not $cleanupFailed -and $managedChildren.Count -eq 0) 'owned_process_cleanup_failed'
 }
 
 # HttpClient 不跟随任何重定向，保留默认 TLS 校验；仅本次请求不使用代理。
@@ -241,6 +410,7 @@ function Wait-Sample([string]$State) {
 }
 
 try {
+    Set-Phase 'guard'
     Assert-ActionsRunner
     $summaryAllowed = $true
     Assert-PortFree
@@ -260,7 +430,7 @@ try {
     $handler.UseProxy = $false
     $client = [Net.Http.HttpClient]::new($handler)
     $client.Timeout = [Threading.Timeout]::InfiniteTimeSpan
-    $report.phase = 'pinned_downloads'
+    Set-Phase 'pinned_downloads'
     $pins = @(
         @{ Name = 'install.ps1'; Size = 0; Limit = 65536; Hash = 'a45a9052b3801388d79475ae3e998e1d1103ad7d22f98c5e32166cdb7bb46642' },
         @{ Name = 'Nexus-0.1.0.zip'; Size = 141872574; Limit = 141872574; Hash = '5917a1436d59cb252bbc0b54f9eb546a9f482857dd6f30da4c863152f332870c' },
@@ -281,7 +451,7 @@ try {
         Require ($manifest.version -ceq $version -and $manifest.archive.sha256 -ceq $pin.Hash -and $manifest.archive.size -eq $pin.Size) 'manifest_archive_mismatch'
     }
     $report.checks += 'all_five_asset_pins_verified'
-    $report.phase = 'baseline_install'
+    Set-Phase 'baseline_install'
     $powershell = (Get-Command powershell.exe -ErrorAction Stop).Source
     $null = Invoke-Child -File $powershell -Arguments @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $root 'install.ps1'), '-Zip', (Join-Path $root 'Nexus-0.1.0.zip'), '-Manifest', (Join-Path $root 'Nexus-0.1.0.manifest.json'), '-InstallRoot', $install) -Seconds 240
     $launcher = Join-Path $install 'launcher.ps1'
@@ -298,7 +468,7 @@ try {
     $python = Join-Path $install 'versions/0.1.0/runtime/python.exe'
     $null = Python-Check @('package', (Join-Path $install 'versions/0.1.0'), (Join-Path $root 'Nexus-0.1.0.zip'), (Join-Path $root 'Nexus-0.1.0.manifest.json'), '0.1.0')
     $report.checks += 'baseline_and_shortcuts_verified'
-    $report.phase = 'sample'
+    Set-Phase 'sample'
     Assert-PortFree
     $env:NEXUS_UPDATE_CATALOG_URL = $site + 'latest.json'
     $null = Invoke-Child -File $powershell -Arguments @('-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', $launcher, '-NoBrowser') -Seconds 90 -ServiceVersion '0.1.0'
@@ -317,7 +487,7 @@ try {
     $sample = Wait-Sample 'succeeded'
     Require ($sample.resolved -and $sample.steps -ge 2) 'sample_not_resolved'
     $report.checks += 'sample_succeeded_without_credentials_or_schedules'
-    $report.phase = 'remote_upgrade'
+    Set-Phase 'remote_upgrade'
     $status = (Request -Uri 'http://127.0.0.1:8760/upgrade/status').Body | ConvertFrom-Json
     Require ($status.configured -eq $true -and $status.available -eq $true -and $status.version -ceq '0.1.1' -and -not $status.error) 'target_not_discovered'
     $null = Request -Uri 'http://127.0.0.1:8760/upgrade/download' -Method POST -Status 302 -Seconds 300
@@ -326,7 +496,7 @@ try {
     Require ((Assert-ServiceOwner).Id -eq $baselineProcess.Id) 'baseline_process_replaced_early'
     $null = Python-Check @('package', (Join-Path $install 'versions/0.1.1'), (Join-Path $root 'Nexus-0.1.1.zip'), (Join-Path $root 'Nexus-0.1.1.manifest.json'), '0.1.1')
     $report.checks += 'real_download_staged_without_activation'
-    $report.phase = 'launcher_activation'
+    Set-Phase 'launcher_activation'
     Stop-OwnedServices
     Assert-PortFree
     Remove-Item Env:NEXUS_UPDATE_CATALOG_URL
@@ -344,7 +514,7 @@ try {
     $status = (Request -Uri 'http://127.0.0.1:8760/upgrade/status').Body | ConvertFrom-Json
     Require ($status.configured -eq $true -and $status.available -eq $false -and -not $status.error -and -not (Test-Path Env:NEXUS_UPDATE_CATALOG_URL)) 'default_update_source_failed'
     $report.checks += 'new_process_pointers_data_and_default_source_verified'
-    $report.phase = 'corrupt_zip'
+    Set-Phase 'corrupt_zip'
     $before = Get-Pointers | ConvertTo-Json -Compress
     $null = Python-Check @('corrupt', $root)
     $rejected = Request -Uri 'http://127.0.0.1:8760/upgrade/stage' -Method POST -Status 400 -Form @{ archive_path = (Join-Path $root 'corrupt.zip'); manifest_path = (Join-Path $root 'corrupt.manifest.json') }
@@ -356,18 +526,23 @@ try {
     $report.sample = @{ job_id = $jobId; inbox_id = $sample.inbox_id; state = 'succeeded'; retained_sha256 = $sample.sha256 }
     $report.versions = @{ current = '0.1.1'; previous = '0.1.0'; pending = $null }
     $report.result = 'passed'
-    $report.phase = 'complete'
+    Set-Phase 'complete'
 }
 catch {
-    $report.error = if ($_.Exception.Message -cmatch '^[a-z][a-z0-9_]{1,70}$') { $_.Exception.Message } else { 'unexpected_failure' }
+    $message = $_.Exception.GetBaseException().Message
+    $report.error = if ($message -cmatch '^[a-z][a-z0-9_]{1,70}$') { $message } else { 'unexpected_failure' }
 }
 finally {
+    Set-Phase '' $report.result
+    $cleanupStartedMs = $clock.ElapsedMilliseconds
+    Write-Host ('{"event":"phase_start","phase":"cleanup","elapsed_ms":' + $cleanupStartedMs + '}')
     try { Stop-OwnedServices; $report.cleanup_owned_processes = $true }
     catch { $report.result = 'failed'; $report.cleanup_owned_processes = $false; $report.error = 'owned_process_cleanup_failed' }
     if ($environmentSet) {
         foreach ($name in @('NEXUS_APP_DATA_DIR', 'NEXUS_DB_PATH', 'NEXUS_UPDATE_INSTALL_ROOT', 'NEXUS_UPDATE_CATALOG_URL')) { Remove-Item "Env:$name" -ErrorAction SilentlyContinue }
     }
     if ($client) { $client.Dispose() }
+    Write-Host ([ordered]@{ event = 'phase_end'; phase = 'cleanup'; result = $(if ($report.cleanup_owned_processes) { 'passed' } else { 'failed' }); elapsed_ms = ($clock.ElapsedMilliseconds - $cleanupStartedMs) } | ConvertTo-Json -Compress)
     $report.elapsed_seconds = [int]$clock.Elapsed.TotalSeconds
     $json = $report | ConvertTo-Json -Depth 5
     Write-Output $json
