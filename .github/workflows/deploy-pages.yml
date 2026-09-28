@@ -1,28 +1,22 @@
-name: 手动发布 Nexus 客户端站点
+name: 部署浏览器发布页
 
 on:
   workflow_dispatch:
-    inputs:
-      release_tag:
-        description: 已发布正式 Release 的规范 tag，例如 v0.1.1
-        type: string
-        required: true
 
 permissions:
   contents: read
   pages: write
   id-token: write
 
-# 不按分支或 tag 分组；整个仓库只能有一个正在部署的发布站工作流。
 concurrency:
-  group: nexus-release-pages
+  group: nexus-release-page
   cancel-in-progress: false
 
 jobs:
   deploy:
     if: github.repository == 'yccwh2008/nexus-releases' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -31,37 +25,10 @@ jobs:
         with:
           persist-credentials: false
       - uses: actions/configure-pages@v5
-      - name: 下载快照并绑定已发布版本资产
-        id: site
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.release_tag }}
-        run: |
-          set -euo pipefail
-          VERSION="$(python3 scripts/release_site/site.py version --tag "$RELEASE_TAG")"
-          DOWNLOAD="$(mktemp -d "$RUNNER_TEMP/nexus-pages.XXXXXX")"
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$DOWNLOAD/releases.json"
-          python3 scripts/release_site/site.py gate --version "$VERSION" --releases "$DOWNLOAD/releases.json"
-          ASSET="Nexus-site-$VERSION.zip"
-          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --dir "$DOWNLOAD" --pattern "$ASSET" --pattern "$ASSET.sha256"
-          python3 scripts/release_site/site.py unpack --bundle "$DOWNLOAD/$ASSET" --checksum "$DOWNLOAD/$ASSET.sha256" --version "$VERSION" --releases "$DOWNLOAD/releases.json" --output "$GITHUB_WORKSPACE/_site"
-          printf 'version=%s\ndownload=%s\n' "$VERSION" "$DOWNLOAD" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-pages-artifact@v4
         with:
-          path: _site
+          path: site
           retention-days: 1
-      # 必须保留 GitHub API 的完整 assets 元数据；摘要缺失时不得绕过门禁。
-      - name: 部署前复核原资产身份及版本门禁
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ steps.site.outputs.version }}
-          DOWNLOAD: ${{ steps.site.outputs.download }}
-        run: |
-          set -euo pipefail
-          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/releases?per_page=100" > "$DOWNLOAD/releases-current.json"
-          python3 scripts/release_site/site.py gate --version "$VERSION" --releases "$DOWNLOAD/releases-current.json" --site "$GITHUB_WORKSPACE/_site"
-      - name: 部署已验证站点
+      - name: 部署浏览器发布页
         id: deployment
         uses: actions/deploy-pages@v4
