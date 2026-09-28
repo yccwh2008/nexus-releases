@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>江枢 · Nexus 客户端下载</title>
+<style>
+:root{color-scheme:light;--ink:#17212b;--muted:#5c6b78;--line:#dce4ea;--accent:#0a6fd6;--bg:#f5f8fb}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","Microsoft YaHei",sans-serif}main{max-width:820px;margin:48px auto;padding:0 24px}.card{background:#fff;border:1px solid var(--line);border-radius:16px;padding:28px;box-shadow:0 8px 30px #17212b12}h1{margin:.15em 0 .35em;font-size:32px}h2{margin:1.6em 0 .45em;font-size:21px}.eyebrow{color:var(--accent);font-weight:700;letter-spacing:.08em}.muted{color:var(--muted)}.version{font-size:19px;font-weight:700}.actions{display:flex;flex-wrap:wrap;gap:12px;margin:22px 0}.button{display:inline-block;padding:10px 16px;border-radius:9px;background:var(--accent);color:#fff;text-decoration:none;font-weight:700}.button.secondary{background:#edf4fc;color:#145b9d}.hash{overflow-wrap:anywhere;background:#f3f6f8;border-radius:8px;padding:10px 12px;font:13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}li{margin:.35em 0}footer{margin-top:20px;color:var(--muted);font-size:13px}
+</style>
+</head>
+<body>
+<main><div class="card">
+<p class="eyebrow">江枢 · Nexus</p>
+<h1>在自己的电脑上，完成日常办公。</h1>
+<p class="muted">Windows 本机安装、本机运行。发布页只提供客户端安装包与版本清单，不接收员工数据、账号凭据或任务记录。</p>
+<h2>当前正式版本</h2>
+<p class="version">Nexus 0.1.3</p>
+<p>安装器、ZIP 和 manifest 从腾讯云 COS 正式源下载；COS 地址用于文件分发，当前页面由 GitHub Pages 提供浏览器预览。</p>
+<div class="actions">
+<a class="button" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.3-Setup.exe">下载 Windows 安装器 EXE</a>
+<a class="button secondary" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.3.zip">下载 ZIP 备用包</a>
+<a class="button secondary" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.3.manifest.json">下载 manifest</a>
+</div>
+<h2>校验值</h2>
+<p>ZIP：123,554,794 字节</p>
+<div class="hash">fb4d55354fd2361c8c7d1eefb4a8e55f9d97beebfe8b12d5cf480885edfbdd95</div>
+<h2>安装</h2>
+<ol><li>下载上方 Windows 安装器 EXE。</li><li>双击 EXE，按安装向导完成安装。</li><li>通过桌面 Nexus 入口启动；业务界面只在本机 127.0.0.1:8760 运行。</li></ol>
+<p class="muted">发布页不代表真实业务验收已完成；EHR、社保、招聘和云之家按各自现场条件验收。</p>
+</div><footer>版本清单：<a href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/latest.json">COS latest.json</a></footer></main>
+</body>
+</html>
