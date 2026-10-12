@@ -15,19 +15,19 @@
 <h1>在自己的电脑上，完成日常办公。</h1>
 <p class="muted">Windows 本机安装、本机运行。发布页只提供客户端安装包与版本清单，不接收员工数据、账号凭据或任务记录。</p>
 <h2>当前正式版本</h2>
-<p class="version">Nexus 0.1.28</p>
-<p class="muted">发布日期：2026-10-11</p>
+<p class="version">Nexus 0.1.29</p>
+<p class="muted">发布日期：2026-10-12</p>
 <h2>本次更新</h2>
-<ul><li>新增「一键报销」：识别发票与付款截图，自动在每刻录入、提交并打印归档</li><li>离职第 5 步医保停保：页面回读核对一致后自动提交一次，结果不明时只查询不重复提交</li></ul>
+<ul><li>社保打印遇到重名，先按 EHR 同名员工库区分部门，不再每次停下来问（首页新增“同名员工库更新”）</li><li>社保证明：官网未入账的月份不再拦下，按官网记录照常出具</li><li>修复浏览器自动翻译改写人社页面姓名（如“彭婷”被显示成“彭婷婷”）导致停在名单确认</li><li>等人时点“打开业务页面”直接调出任务正在办的那一页，不再新开一个登录页</li></ul>
 <p>安装器、ZIP 和 manifest 从腾讯云 COS 正式源下载；COS 地址用于文件分发，当前页面由 GitHub Pages 提供浏览器预览。</p>
 <div class="actions">
-<a class="button" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.28-Setup.exe">下载 Windows 安装器 EXE</a>
-<a class="button secondary" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.28.zip">下载 ZIP 备用包</a>
-<a class="button secondary" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.28.manifest.json">下载 manifest</a>
+<a class="button" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.29-Setup.exe">下载 Windows 安装器 EXE</a>
+<a class="button secondary" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.29.zip">下载 ZIP 备用包</a>
+<a class="button secondary" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.29.manifest.json">下载 manifest</a>
 </div>
 <h2>校验值</h2>
-<p>ZIP：123,919,860 字节</p>
-<div class="hash">be879cf8f0b125c4b6d581ed71de5f21f3f40b64cb1f864c5c268777939c8ff6</div>
+<p>ZIP：123,925,076 字节</p>
+<div class="hash">30f869a1d04bdbd2af92fd1810917e421b21b41d9c48c3e45cd34d1519656fab</div>
 <h2>安装</h2>
 <ol><li>下载上方 Windows 安装器 EXE。</li><li>双击 EXE，按安装向导完成安装。</li><li>通过桌面 Nexus 入口启动；业务界面只在本机 127.0.0.1:8760 运行。</li></ol>
 <p>已经装过的同事不用重装：打开 Nexus，页面顶部出现新版本提示后点升级即可。</p>
