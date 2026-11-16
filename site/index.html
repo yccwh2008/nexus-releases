@@ -15,19 +15,19 @@
 <h1>在自己的电脑上，完成日常办公。</h1>
 <p class="muted">Windows 本机安装、本机运行。发布页只提供客户端安装包与版本清单，不接收员工数据、账号凭据或任务记录。</p>
 <h2>当前正式版本</h2>
-<p class="version">Nexus 0.1.141</p>
+<p class="version">Nexus 0.1.142</p>
 <p class="muted">发布日期：2026-11-16</p>
 <h2>本次更新</h2>
-<ul><li>官方模型服务不可用时，看图（含 EHR、医保登录验证码）也改走备用渠道，登录不再卡住</li><li>备用渠道偶发断线时自动换另一条，简历筛选整理推送不再因此停下</li><li>江小枢可以直接办招聘管理页的“同步到智联”“更新本地表单”“智联下架”</li><li>简历筛选：下载途中有新投递时按候选人跨页找人，已在“沟通中”的不重复回复</li><li>全项目通读整改第一批：防重复提交、同日第二次筛选合并、等人提示说人话等</li></ul>
+<ul><li>EHR 写入（离职单、调动单、江小枢与 MCP 写入）平时不再输验证码：后台保持 EHR 登录状态</li><li>修正 EHR 会话过期时把单点登录一起注销的问题</li><li>招聘：更新本地表单、智联下架在有在办任务时先提示，不再与同步或筛选同时改需求</li></ul>
 <p>安装器、ZIP 和 manifest 从腾讯云 COS 正式源下载；COS 地址用于文件分发，当前页面由 GitHub Pages 提供浏览器预览。</p>
 <div class="actions">
-<a class="button" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.141-Setup.exe">下载 Windows 安装器 EXE</a>
-<a class="button secondary" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.141.zip">下载 ZIP 备用包</a>
-<a class="button secondary" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.141.manifest.json">下载 manifest</a>
+<a class="button" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.142-Setup.exe">下载 Windows 安装器 EXE</a>
+<a class="button secondary" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.142.zip">下载 ZIP 备用包</a>
+<a class="button secondary" href="https://nexus-releases-1480312857.cos.ap-guangzhou.myqcloud.com/Nexus-0.1.142.manifest.json">下载 manifest</a>
 </div>
 <h2>校验值</h2>
-<p>ZIP：124,413,159 字节</p>
-<div class="hash">5590f4dca4dd789698af446af25f1510dc0c397b37f9a5de91abd6394a56b386</div>
+<p>ZIP：124,418,940 字节</p>
+<div class="hash">5804cbbd44213dee951d9ab940515e57edeffd985a8d18d63758edfc3be5ae0c</div>
 <h2>安装</h2>
 <ol><li>下载上方 Windows 安装器 EXE。</li><li>双击 EXE，按安装向导完成安装。</li><li>通过桌面 Nexus 入口启动；业务界面只在本机 127.0.0.1:8760 运行。</li></ol>
 <p>已经装过的同事不用重装：打开 Nexus，页面顶部出现新版本提示后点升级即可。</p>
